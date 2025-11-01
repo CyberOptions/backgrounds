@@ -20,18 +20,17 @@ jobs:
           python-version: "3.x"
 
       - name: Install dependencies
-        run: pip install openai pillow pytz requests
+        run: pip install requests pillow pytz
 
       - name: Generate and resize monthly background
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python - <<'PY'
-          import os, datetime, base64, pytz, io
+          import os, datetime, base64, pytz, io, sys
           import requests
           from PIL import Image
 
-          # --- Date setup ---
           tz = pytz.timezone("America/Toronto")
           now = datetime.datetime.now(tz)
           month_en = now.strftime("%B")
@@ -39,46 +38,50 @@ jobs:
           year = now.strftime("%Y")
           filename = f"{month_en}-{year}.png"
 
-          # --- Prompt ---
           prompt = (
               f"Ultra-realistic 4K digital photograph of a nature landscape representing {month_fr} {year}, "
               f"with a wooden sign showing '{month_fr} {year}' in French, matching the seasonal mood in Canada, "
               f"natural lighting, photorealistic, cinematic tone."
           )
 
-# --- Generate image ---
-print(f"Generating background for {month_fr} {year} ...")
+          print(f"Generating background for {month_fr} {year} ...")
 
-response = requests.post(
-    "https://api.openai.com/v1/images/generations",
-    headers={
-        "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
-        "Content-Type": "application/json",
-    },
-    json={
-        "model": "dall-e-3",  # ✅ Correct model name
-        "prompt": prompt,
-        "size": "1024x1024",
-        "n": 1,
-    },
-)
+          try:
+              response = requests.post(
+                  "https://api.openai.com/v1/images/generations",
+                  headers={
+                      "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                      "Content-Type": "application/json",
+                  },
+                  json={
+                      "model": "dall-e-3",  # ✅ Correct model name
+                      "prompt": prompt,
+                      "size": "1024x1024",
+                      "n": 1,
+                  },
+              )
 
-data = response.json()
+              data = response.json()
+              if "error" in data:
+                  print("❌ OpenAI API error:", data["error"]["message"])
+                  sys.exit(1)
 
-# --- Handle API errors gracefully ---
-if "error" in data:
-    print("❌ OpenAI API error:", data["error"]["message"])
-    raise SystemExit(1)
+              if "data" not in data:
+                  print("❌ Unexpected response format:", data)
+                  sys.exit(1)
 
-b64_img = data["data"][0]["b64_json"]
-img_data = base64.b64decode(b64_img)
-img = Image.open(io.BytesIO(img_data)).convert("RGB")
+              b64_img = data["data"][0]["b64_json"]
+              img_data = base64.b64decode(b64_img)
+              img = Image.open(io.BytesIO(img_data)).convert("RGB")
 
+              # Resize to 1024x633
+              img = img.resize((1024, 633))
+              img.save(filename, format="PNG")
+              print("✅ Image saved:", filename)
 
-          # --- Resize to 1024x633 ---
-          img = img.resize((1024, 633))
-          img.save(filename, format="PNG")
-          print("✅ Image saved:", filename)
+          except Exception as e:
+              print("❌ Failed to generate image:", e)
+              sys.exit(1)
           PY
 
       - name: Commit and push background
@@ -86,8 +89,10 @@ img = Image.open(io.BytesIO(img_data)).convert("RGB")
           month=$(TZ=America/Toronto date +"%B")
           year=$(TZ=America/Toronto date +"%Y")
           filename="${month}-${year}.png"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git add "$filename" || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
