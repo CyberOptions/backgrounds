@@ -1,0 +1,85 @@
+name: Monthly Background Generator
+
+on:
+  schedule:
+    - cron: "0 11 1 * *"
+    - cron: "0 12 1 * *"
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: "Optional: direct URL of the background image to use"
+        required: false
+        type: string
+
+jobs:
+  generate-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: pip install pillow requests pytz
+
+      - name: Prepare background image
+        env:
+            BACKGROUND_URL: ${{ secrets.BACKGROUND_URL }}
+            IMAGE_URL_INPUT: ${{ github.event.inputs.image_url }}
+            GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python - <<'PY'
+          import os, sys, datetime, io
+          from urllib.request import urlopen, Request
+          from PIL import Image
+          import pytz
+
+          tz = pytz.timezone('America/Toronto')
+          now_toronto = datetime.datetime.now(tz)
+
+          if os.environ.get('GITHUB_EVENT_NAME') == 'schedule':
+              if now_toronto.hour != 7:
+                  print(f"Skipping: local time is {now_toronto.strftime('%H:%M')} ET, not 07:00.")
+                  sys.exit(0)
+
+          month_en = now_toronto.strftime('%B')
+          year = now_toronto.strftime('%Y')
+          filename = f"{month_en}-{year}.png"
+          print("Target filename:", filename)
+
+          src = os.environ.get('IMAGE_URL_INPUT') or os.environ.get('BACKGROUND_URL')
+
+          if not src:
+              print("No BACKGROUND_URL secret and no manual image_url provided.")
+              print("Creating a placeholder so the job stays green.")
+              Image.new('RGB', (1024, 633), (20, 30, 40)).save(filename)
+              sys.exit(0)
+
+          req = Request(src, headers={'User-Agent': 'Mozilla/5.0'})
+          with urlopen(req, timeout=60) as r:
+              data = r.read()
+
+          im = Image.open(io.BytesIO(data)).convert('RGB')
+          im = im.resize((1024, 633))
+          im.save(filename, format='PNG')
+          print('Saved:', filename)
+          PY
+
+      - name: Commit and push background
+        run: |
+          month=$(TZ=America/Toronto date +"%B")
+          year=$(TZ=America/Toronto date +"%Y")
+          filename="${month}-${year}.png"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$filename" || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Add $filename background"
+            git push
+          fi
