@@ -1,15 +1,11 @@
-name: Monthly Background Generator
+name: Monthly Background Generator (Fully Automated)
 
 on:
   schedule:
+    # 7:00 AM America/Toronto across DST (11 & 12 UTC)
     - cron: "0 11 1 * *"
     - cron: "0 12 1 * *"
   workflow_dispatch:
-    inputs:
-      image_url:
-        description: "Optional: direct URL of the background image to use"
-        required: false
-        type: string
 
 jobs:
   generate-and-commit:
@@ -24,49 +20,57 @@ jobs:
           python-version: "3.x"
 
       - name: Install dependencies
-        run: pip install pillow requests pytz
+        run: pip install openai pillow pytz requests
 
-      - name: Prepare background image
+      - name: Generate and resize monthly background
         env:
-            BACKGROUND_URL: ${{ secrets.BACKGROUND_URL }}
-            IMAGE_URL_INPUT: ${{ github.event.inputs.image_url }}
-            GITHUB_EVENT_NAME: ${{ github.event_name }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python - <<'PY'
-          import os, sys, datetime, io
-          from urllib.request import urlopen, Request
+          import os, datetime, base64, pytz, io
+          import requests
           from PIL import Image
-          import pytz
 
-          tz = pytz.timezone('America/Toronto')
-          now_toronto = datetime.datetime.now(tz)
-
-          if os.environ.get('GITHUB_EVENT_NAME') == 'schedule':
-              if now_toronto.hour != 7:
-                  print(f"Skipping: local time is {now_toronto.strftime('%H:%M')} ET, not 07:00.")
-                  sys.exit(0)
-
-          month_en = now_toronto.strftime('%B')
-          year = now_toronto.strftime('%Y')
+          # --- Date setup ---
+          tz = pytz.timezone("America/Toronto")
+          now = datetime.datetime.now(tz)
+          month_en = now.strftime("%B")
+          month_fr = now.strftime("%B").capitalize()
+          year = now.strftime("%Y")
           filename = f"{month_en}-{year}.png"
-          print("Target filename:", filename)
 
-          src = os.environ.get('IMAGE_URL_INPUT') or os.environ.get('BACKGROUND_URL')
+          # --- Prompt ---
+          prompt = (
+              f"Ultra-realistic 4K digital photograph of a nature landscape representing {month_fr} {year}, "
+              f"with a wooden sign showing '{month_fr} {year}' in French, matching the seasonal mood in Canada, "
+              f"natural lighting, photorealistic, cinematic tone."
+          )
 
-          if not src:
-              print("No BACKGROUND_URL secret and no manual image_url provided.")
-              print("Creating a placeholder so the job stays green.")
-              Image.new('RGB', (1024, 633), (20, 30, 40)).save(filename)
-              sys.exit(0)
+          # --- Generate image ---
+          print(f"Generating background for {month_fr} {year} ...")
+          response = requests.post(
+              "https://api.openai.com/v1/images/generations",
+              headers={
+                  "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                  "Content-Type": "application/json",
+              },
+              json={
+                  "model": "gpt-image-1",
+                  "prompt": prompt,
+                  "size": "1024x1024",
+                  "n": 1,
+              },
+          )
 
-          req = Request(src, headers={'User-Agent': 'Mozilla/5.0'})
-          with urlopen(req, timeout=60) as r:
-              data = r.read()
+          data = response.json()
+          b64_img = data["data"][0]["b64_json"]
+          img_data = base64.b64decode(b64_img)
+          img = Image.open(io.BytesIO(img_data)).convert("RGB")
 
-          im = Image.open(io.BytesIO(data)).convert('RGB')
-          im = im.resize((1024, 633))
-          im.save(filename, format='PNG')
-          print('Saved:', filename)
+          # --- Resize to 1024x633 ---
+          img = img.resize((1024, 633))
+          img.save(filename, format="PNG")
+          print("✅ Image saved:", filename)
           PY
 
       - name: Commit and push background
@@ -80,6 +84,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Add $filename background"
+            git commit -m "Add $filename background (auto-generated)"
             git push
           fi
