@@ -46,26 +46,34 @@ jobs:
               f"natural lighting, photorealistic, cinematic tone."
           )
 
-          # --- Generate image ---
-          print(f"Generating background for {month_fr} {year} ...")
-          response = requests.post(
-              "https://api.openai.com/v1/images/generations",
-              headers={
-                  "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
-                  "Content-Type": "application/json",
-              },
-              json={
-                  "model": "gpt-image-1",
-                  "prompt": prompt,
-                  "size": "1024x1024",
-                  "n": 1,
-              },
-          )
+# --- Generate image ---
+print(f"Generating background for {month_fr} {year} ...")
 
-          data = response.json()
-          b64_img = data["data"][0]["b64_json"]
-          img_data = base64.b64decode(b64_img)
-          img = Image.open(io.BytesIO(img_data)).convert("RGB")
+response = requests.post(
+    "https://api.openai.com/v1/images/generations",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": "dall-e-3",  # ✅ Correct model name
+        "prompt": prompt,
+        "size": "1024x1024",
+        "n": 1,
+    },
+)
+
+data = response.json()
+
+# --- Handle API errors gracefully ---
+if "error" in data:
+    print("❌ OpenAI API error:", data["error"]["message"])
+    raise SystemExit(1)
+
+b64_img = data["data"][0]["b64_json"]
+img_data = base64.b64decode(b64_img)
+img = Image.open(io.BytesIO(img_data)).convert("RGB")
+
 
           # --- Resize to 1024x633 ---
           img = img.resize((1024, 633))
